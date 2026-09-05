@@ -1,18 +1,41 @@
 use crate::mime::{get_mime_type, map_mime_to_folder};
 use crate::stability::wait_for_stable_size;
+use std::path::PathBuf;
 use std::thread;
 use std::{fs, path::Path, time::Duration};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const STABLE_DURATION: Duration = Duration::from_secs(2);
 
-pub fn process_file(file_path: &Path, downloads_dir: &Path) {
-    if !file_path.exists() {
-        return; // file already moved/removed by another handler or the user
+fn unique_destination(target_path: &Path) -> PathBuf {
+    if !target_path.exists() {
+        return target_path.to_path_buf();
     }
 
-    if !file_path.is_file() {
-        return;
+    let parent = target_path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = target_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file");
+    let ext = target_path.extension().and_then(|e| e.to_str());
+
+    let mut counter = 1;
+    loop {
+        let candidate_name = match ext {
+            Some(ext) => format!("{}({}).{}", stem, counter, ext),
+            None => format!("{}({})", stem, counter),
+        };
+        let candidate = parent.join(candidate_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+        counter += 1;
+    }
+}
+
+pub fn process_file(file_path: &Path, downloads_dir: &Path) {
+    if !file_path.exists() || !file_path.is_file() {
+        return; // file already moved/removed by another handler or the user
     }
 
     if let Ok(relative_path) = file_path.strip_prefix(downloads_dir) {
@@ -43,7 +66,7 @@ pub fn process_file(file_path: &Path, downloads_dir: &Path) {
     let target_subfolder = map_mime_to_folder(&mime);
 
     let destination_folder = downloads_dir.join(target_subfolder);
-    let target_path = destination_folder.join(file_name);
+    let mut target_path = destination_folder.join(file_name);
 
     if let Err(e) = std::fs::create_dir_all(&destination_folder) {
         eprintln!(
@@ -51,6 +74,7 @@ pub fn process_file(file_path: &Path, downloads_dir: &Path) {
             destination_folder, e
         )
     };
+    target_path = unique_destination(&target_path);
 
     println!(
         "[MOVING] {} -> {} ({})",
