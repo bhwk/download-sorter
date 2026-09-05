@@ -1,0 +1,9 @@
+[Unit]
+Description=Auto-sort Downloads folder by file type
+
+[Service]
+ExecStart=/home/{USER}/projects/download-sorter/result/bin/download_sorter
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
