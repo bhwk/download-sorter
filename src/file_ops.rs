@@ -48,6 +48,16 @@ fn unique_destination(target_path: &Path) -> PathBuf {
     }
 }
 
+fn move_or_copy(src: &Path, dst: &Path) -> std::io::Result<bool> {
+    if fs::rename(src, dst).is_ok() {
+        return Ok(false);
+    }
+    fs::copy(src, dst)?;
+    fs::remove_file(src)?;
+
+    Ok(true)
+}
+
 pub fn process_file(file_path: &Path, downloads_dir: &Path) {
     if !file_path.exists() || !file_path.is_file() {
         return; // file already moved/removed by another handler or the user
@@ -110,10 +120,12 @@ pub fn process_file(file_path: &Path, downloads_dir: &Path) {
         mime
     );
 
-    match fs::rename(file_path, &target_path) {
-        Ok(_) => {
+    match move_or_copy(file_path, &target_path) {
+        Ok(copied) => {
+            let verb = if copied { "COPIED" } else { "MOVED" };
             println!(
-                "[MOVED] {} -> {} ({})",
+                "[{}] {} -> {} ({})",
+                verb,
                 file_name.to_string_lossy(),
                 target_subfolder,
                 mime
@@ -130,41 +142,19 @@ pub fn process_file(file_path: &Path, downloads_dir: &Path) {
                 Low,
             );
         }
-        Err(_) => {
-            if let Err(e) = fs::copy(file_path, &target_path) {
-                eprintln!("[ERROR] Failed to copy file: {:?}", e);
+        Err(e) => {
+            eprintln!(
+                "[ERROR] Failed to sort {}: {}",
+                file_name.to_string_lossy(),
+                e
+            );
 
-                notify_message(
-                    "File sort failed",
-                    &format!("Could not move {}: {}", file_name.to_string_lossy(), e),
-                    "dialog-error",
-                    Critical,
-                );
-            } else {
-                println!(
-                    "[COPY] {} -> {} ({})",
-                    file_name.to_string_lossy(),
-                    target_subfolder,
-                    mime
-                );
-                println!("[COPY] Removing file at: {:?}", file_path);
-                if let Err(e) = fs::remove_file(file_path) {
-                    eprintln!("[ERROR] Failed to remove file: {:?}", e);
-
-                    notify_message(
-                        "File sort failed",
-                        &format!(
-                            "Copied {} but failed to remove original: {}",
-                            file_name.to_string_lossy(),
-                            e
-                        ),
-                        "dialog-error",
-                        Critical,
-                    );
-                } else {
-                    println!("[COPY] Removed file at: {:?}", file_path);
-                }
-            }
+            notify_message(
+                "File sort failed",
+                &format!("Could not move {}: {}", file_name.to_string_lossy(), e),
+                "dialog-error",
+                Critical,
+            );
         }
     }
 }
@@ -180,7 +170,7 @@ pub fn sort_existing_files(downloads_dir: &Path) -> std::io::Result<()> {
         }));
     }
     for h in handles {
-        _ = h.join();
+        let _ = h.join();
     }
     Ok(())
 }
