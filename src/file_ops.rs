@@ -70,7 +70,7 @@ pub fn process_file(file_path: &Path, downloads_dir: &Path) {
     let destination_folder = downloads_dir.join(target_subfolder);
     let mut target_path = destination_folder.join(file_name);
 
-    if let Err(e) = std::fs::create_dir_all(&destination_folder) {
+    if let Err(e) = fs::create_dir_all(&destination_folder) {
         eprintln!(
             "[ERROR] Could not create directory {:?}: {}",
             destination_folder, e
