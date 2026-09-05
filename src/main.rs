@@ -5,16 +5,19 @@ mod stability;
 use notify::{
     event::ModifyKind, Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
 };
-use std::collections::HashSet;
+use rapidhash::RapidHashSet;
 use std::sync::{Arc, Mutex};
 use std::{sync::mpsc::channel, thread};
 
 use crate::file_ops::{process_file, sort_existing_files};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+type Error = Box<dyn std::error::Error>;
+
+fn main() -> Result<(), Error> {
     let downloads_dir = dirs::download_dir().ok_or("Could not locate downloads directory")?;
 
-    let in_progress: Arc<Mutex<HashSet<std::path::PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+    let in_progress: Arc<Mutex<RapidHashSet<std::path::PathBuf>>> =
+        Arc::new(Mutex::new(RapidHashSet::default()));
 
     println!("Watching downloads folder: {:?}", downloads_dir);
 
