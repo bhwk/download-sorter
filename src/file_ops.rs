@@ -1,5 +1,5 @@
+use notify_rust::Notification;
 use notify_rust::Urgency::{Critical, Low};
-use notify_rust::{Notification, Urgency};
 
 use crate::mime::{get_mime_type, map_mime_to_folder};
 use crate::stability::wait_for_stable_size;
@@ -10,7 +10,12 @@ use std::{fs, path::Path, time::Duration};
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const STABLE_DURATION: Duration = Duration::from_secs(2);
 
-fn notify_message(summary: &str, message: &str, icon: &str, urgency: Urgency) {
+enum Transfer {
+    Moved,
+    Copied,
+}
+
+fn notify(summary: &str, message: &str, icon: &str, urgency: notify_rust::Urgency) {
     if let Err(e) = Notification::new()
         .summary(summary)
         .body(message)
@@ -20,6 +25,14 @@ fn notify_message(summary: &str, message: &str, icon: &str, urgency: Urgency) {
     {
         eprintln!("[ERROR] Failed to send notification: {}", e)
     }
+}
+
+fn notify_error(message: &str) {
+    notify("File sort failed", message, "dialog-error", Critical);
+}
+
+fn notify_message(message: &str) {
+    notify("File sorted", message, "folder", Low);
 }
 
 fn unique_destination(target_path: &Path) -> PathBuf {
@@ -48,19 +61,19 @@ fn unique_destination(target_path: &Path) -> PathBuf {
     }
 }
 
-fn move_or_copy(src: &Path, dst: &Path) -> std::io::Result<bool> {
+fn move_or_copy(src: &Path, dst: &Path) -> std::io::Result<Transfer> {
     if fs::rename(src, dst).is_ok() {
-        return Ok(false);
+        return Ok(Transfer::Moved);
     }
     fs::copy(src, dst)?;
     fs::remove_file(src)?;
 
-    Ok(true)
+    Ok(Transfer::Copied)
 }
 
 pub fn process_file(file_path: &Path, downloads_dir: &Path) {
-    if !file_path.exists() || !file_path.is_file() {
-        return; // file already moved/removed by another handler or the user
+    if !file_path.metadata().map(|m| m.is_file()).unwrap_or(false) {
+        return;
     }
 
     if let Ok(relative_path) = file_path.strip_prefix(downloads_dir) {
@@ -94,20 +107,12 @@ pub fn process_file(file_path: &Path, downloads_dir: &Path) {
     let mut target_path = destination_folder.join(file_name);
 
     if let Err(e) = fs::create_dir_all(&destination_folder) {
-        eprintln!(
+        let err_msg = format!(
             "[ERROR] Could not create directory {:?}: {}",
             destination_folder, e
         );
-        notify_message(
-            "File sort failed",
-            &format!(
-                "Could not create folder {}: {}",
-                destination_folder.display(),
-                e
-            ),
-            "dialog-error",
-            Critical,
-        );
+        eprintln!("{err_msg}");
+        notify_error(&err_msg);
         return;
     }
 
@@ -121,8 +126,11 @@ pub fn process_file(file_path: &Path, downloads_dir: &Path) {
     );
 
     match move_or_copy(file_path, &target_path) {
-        Ok(copied) => {
-            let verb = if copied { "COPIED" } else { "MOVED" };
+        Ok(verb) => {
+            let verb = match verb {
+                Transfer::Moved => "MOVED",
+                Transfer::Copied => "COPIED",
+            };
             println!(
                 "[{}] {} -> {} ({})",
                 verb,
@@ -131,46 +139,32 @@ pub fn process_file(file_path: &Path, downloads_dir: &Path) {
                 mime
             );
 
-            notify_message(
-                "File sorted",
-                &format!(
-                    "{} moved to {}",
-                    file_name.to_string_lossy(),
-                    target_subfolder
-                ),
-                "folder",
-                Low,
-            );
+            notify_message(&format!(
+                "{} moved to {}",
+                file_name.to_string_lossy(),
+                target_subfolder
+            ));
         }
+
         Err(e) => {
-            eprintln!(
+            let err_msg = format!(
                 "[ERROR] Failed to sort {}: {}",
                 file_name.to_string_lossy(),
                 e
             );
 
-            notify_message(
-                "File sort failed",
-                &format!("Could not move {}: {}", file_name.to_string_lossy(), e),
-                "dialog-error",
-                Critical,
-            );
+            eprintln!("{err_msg}");
+            notify_error(&err_msg);
         }
     }
 }
 
 pub fn sort_existing_files(downloads_dir: &Path) -> std::io::Result<()> {
-    let mut handles = vec![];
-    for entry in fs::read_dir(downloads_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let downloads_dir = downloads_dir.to_path_buf();
-        handles.push(thread::spawn(move || {
-            process_file(&path, &downloads_dir);
-        }));
-    }
-    for h in handles {
-        let _ = h.join();
-    }
-    Ok(())
+    thread::scope(|s| {
+        for entry in fs::read_dir(downloads_dir)? {
+            let path = entry?.path();
+            s.spawn(move || process_file(&path, downloads_dir));
+        }
+        Ok(())
+    })
 }
