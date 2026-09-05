@@ -1,10 +1,10 @@
 use notify_rust::Notification;
 use notify_rust::Urgency::{Critical, Low};
+use rayon::prelude::*;
 
 use crate::mime::{get_mime_type, map_mime_to_folder};
 use crate::stability::wait_for_stable_size;
 use std::path::PathBuf;
-use std::thread;
 use std::{fs, path::Path, time::Duration};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -160,11 +160,13 @@ pub fn process_file(file_path: &Path, downloads_dir: &Path) {
 }
 
 pub fn sort_existing_files(downloads_dir: &Path) -> std::io::Result<()> {
-    thread::scope(|s| {
-        for entry in fs::read_dir(downloads_dir)? {
-            let path = entry?.path();
-            s.spawn(move || process_file(&path, downloads_dir));
-        }
-        Ok(())
-    })
+    let entries: Vec<_> = fs::read_dir(downloads_dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+    entries.par_iter().for_each(|path| {
+        process_file(path, downloads_dir);
+    });
+
+    Ok(())
 }
