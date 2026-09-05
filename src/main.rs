@@ -1,114 +1,70 @@
-use anyhow::{anyhow, Result};
-use infer;
-use std::{env, fs, path, thread, time};
+mod file_ops;
+mod mime;
+mod stability;
 
-fn setup_folders() -> Result<()> {
-    let folders = vec![
-        "Image",
-        "Video",
-        "Audio",
-        "Archive",
-        "Book",
-        "Documents",
-        "Font",
-        "Application",
-    ];
-    let working_dir = env::current_dir()?;
-    if let Some(name) = working_dir.file_name() {
-        if let Some(filename_str) = name.to_str() {
-            if folders.contains(&filename_str) {
-                return Err(anyhow!("Parent folder shares name with MIME type"));
+use notify::{
+    event::ModifyKind, Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
+};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+use std::{sync::mpsc::channel, thread};
+
+use crate::file_ops::{process_file, sort_existing_files};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let downloads_dir = dirs::download_dir().ok_or("Could not locate downloads directory")?;
+
+    let in_progress: Arc<Mutex<HashSet<std::path::PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+
+    println!("Watching downloads folder: {:?}", downloads_dir);
+
+    if let Err(e) = sort_existing_files(&downloads_dir) {
+        eprintln!("[ERROR] Initial sort failed: {}", e)
+    }
+
+    let (tx, rx) = channel();
+
+    let mut watcher = RecommendedWatcher::new(
+        move |res| {
+            if let Ok(event) = res {
+                _ = tx.send(event);
+            }
+        },
+        Config::default(),
+    )?;
+    watcher.watch(&downloads_dir, RecursiveMode::NonRecursive)?;
+
+    for event in rx {
+        if let Event {
+            kind: EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_)),
+            paths,
+            ..
+        } = event
+        {
+            for path in paths {
+                let downloads_dir = downloads_dir.clone();
+                let in_progress = Arc::clone(&in_progress);
+
+                {
+                    let mut guard = in_progress
+                        .lock()
+                        .map_err(|e| format!("Failed to acquire lock: {:?}", e))?;
+                    if guard.contains(&path) {
+                        continue;
+                    }
+                    guard.insert(path.clone());
+                }
+
+                thread::spawn(move || {
+                    process_file(&path, &downloads_dir);
+                    in_progress
+                        .lock()
+                        .expect("Failed to acquire lock")
+                        .remove(&path)
+                });
             }
         }
     }
-    for path in folders {
-        let path = path::Path::new(path);
-        if path.exists() {
-            continue;
-        } else {
-            fs::create_dir(path)?
-        }
-    }
-    Ok(())
-}
-
-fn check_type(path: &path::PathBuf) -> Result<String> {
-    let path_read = &fs::read(&path)?;
-
-    if infer::is_app(path_read) {
-        return Ok(String::from("Application"));
-    }
-
-    if infer::is_audio(path_read) {
-        return Ok(String::from("Audio"));
-    }
-
-    if infer::is_archive(path_read) {
-        return Ok(String::from("Archive"));
-    }
-
-    if infer::is_book(path_read) {
-        return Ok(String::from("Book"));
-    }
-
-    if infer::is_document(path_read) {
-        return Ok(String::from("Documents"));
-    }
-
-    if infer::is_font(path_read) {
-        return Ok(String::from("Font"));
-    }
-
-    if infer::is_image(path_read) {
-        return Ok(String::from("Image"));
-    }
-
-    if infer::is_video(path_read) {
-        return Ok(String::from("Video"));
-    }
-
-    return Err(anyhow!("File is not a known type"));
-}
-
-fn move_file(path: path::PathBuf) -> Result<()> {
-    let file_type: String = check_type(&path)?;
-
-    let mut new_path = path::PathBuf::from(&file_type);
-    new_path.push(&path.file_name().unwrap().to_str().unwrap());
-    println!(
-        "Moving {} to {}",
-        &path.file_name().unwrap().to_str().unwrap(),
-        &file_type
-    );
-    fs::rename(path, new_path)?;
-    thread::sleep(time::Duration::from_millis(1));
-    Ok(())
-}
-
-fn main() -> Result<()> {
-    setup_folders()?;
-
-    let working_dir = env::current_dir()?;
-
-    for entry in fs::read_dir(&working_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path == env::current_exe()? {
-            continue;
-        }
-
-        if path.is_dir() {
-            continue;
-        }
-
-        match check_type(&path) {
-            Ok(_) => move_file(path)?,
-            Err(_) => {}
-        };
-    }
-
-    thread::sleep(time::Duration::from_secs(5));
 
     Ok(())
 }
