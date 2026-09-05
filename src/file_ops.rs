@@ -1,3 +1,5 @@
+use notify_rust::Notification;
+
 use crate::mime::{get_mime_type, map_mime_to_folder};
 use crate::stability::wait_for_stable_size;
 use std::path::PathBuf;
@@ -72,8 +74,25 @@ pub fn process_file(file_path: &Path, downloads_dir: &Path) {
         eprintln!(
             "[ERROR] Could not create directory {:?}: {}",
             destination_folder, e
-        )
-    };
+        );
+
+        if let Err(notify_err) = Notification::new()
+            .summary("File sort failed")
+            .body(&format!(
+                "Could not create folder {}: {}",
+                destination_folder.display(),
+                e
+            ))
+            .icon("dialog-error")
+            .urgency(notify_rust::Urgency::Critical)
+            .show()
+        {
+            eprintln!("[ERROR] Failed to send error notification: {}", notify_err)
+        }
+
+        return;
+    }
+
     target_path = unique_destination(&target_path);
 
     println!(
@@ -84,15 +103,43 @@ pub fn process_file(file_path: &Path, downloads_dir: &Path) {
     );
 
     match fs::rename(file_path, &target_path) {
-        Ok(_) => println!(
-            "[MOVED] {} -> {} ({})",
-            file_name.to_string_lossy(),
-            target_subfolder,
-            mime
-        ),
+        Ok(_) => {
+            println!(
+                "[MOVED] {} -> {} ({})",
+                file_name.to_string_lossy(),
+                target_subfolder,
+                mime
+            );
+            if let Err(e) = Notification::new()
+                .summary("File sorted")
+                .body(&format!(
+                    "{} moved to {}",
+                    file_name.to_string_lossy(),
+                    target_subfolder
+                ))
+                .icon("folder")
+                .show()
+            {
+                eprintln!("[ERROR] Failed to send notification: {}", e)
+            }
+        }
         Err(_) => {
             if let Err(e) = fs::copy(file_path, &target_path) {
-                eprintln!("[ERROR] Failed to copy file: {:?}", e)
+                eprintln!("[ERROR] Failed to copy file: {:?}", e);
+
+                if let Err(notify_err) = Notification::new()
+                    .summary("File sort failed")
+                    .body(&format!(
+                        "Could not move {}: {}",
+                        file_name.to_string_lossy(),
+                        e
+                    ))
+                    .icon("dialog-error")
+                    .urgency(notify_rust::Urgency::Critical)
+                    .show()
+                {
+                    eprintln!("[ERROR] Failed to send error notification: {}", notify_err)
+                }
             } else {
                 println!(
                     "[COPY] {} -> {} ({})",
@@ -102,7 +149,21 @@ pub fn process_file(file_path: &Path, downloads_dir: &Path) {
                 );
                 println!("[COPY] Removing file at: {:?}", file_path);
                 if let Err(e) = fs::remove_file(file_path) {
-                    eprintln!("[ERROR] Failed to remove file: {:?}", e)
+                    eprintln!("[ERROR] Failed to remove file: {:?}", e);
+
+                    if let Err(notify_err) = Notification::new()
+                        .summary("File sort failed")
+                        .body(&format!(
+                            "Copied {} but failed to remove original: {}",
+                            file_name.to_string_lossy(),
+                            e
+                        ))
+                        .icon("dialog-error")
+                        .urgency(notify_rust::Urgency::Critical)
+                        .show()
+                    {
+                        eprintln!("[ERROR] Failed to send error notification: {}", notify_err)
+                    }
                 } else {
                     println!("[COPY] Removed file at: {:?}", file_path);
                 }
