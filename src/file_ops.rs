@@ -27,12 +27,37 @@ fn notify(summary: &str, message: &str, icon: &str, urgency: notify_rust::Urgenc
     }
 }
 
-fn notify_error(message: &str) {
-    notify("File sort failed", message, "dialog-error", Critical);
+fn notify_file_sorted(message: &str, folder: &Path) {
+    let notification = match Notification::new()
+        .summary("File sorted")
+        .body(message)
+        .icon("folder")
+        .urgency(Low)
+        .action("open-folder", "Open folder")
+        .finalize()
+        .show()
+    {
+        Ok(handle) => handle,
+        Err(e) => {
+            eprintln!("[ERROR] Failed to send notification: {e}");
+            return;
+        }
+    };
+
+    let folder = folder.to_path_buf();
+    std::thread::spawn(move || {
+        notification.wait_for_action(|action| {
+            if action == "open-folder" {
+                if let Err(e) = std::process::Command::new("xdg-open").arg(&folder).spawn() {
+                    eprintln!("[ERROR] Failed to open folder: {e}");
+                }
+            }
+        });
+    });
 }
 
-fn notify_message(message: &str) {
-    notify("File sorted", message, "folder", Low);
+fn notify_error(message: &str) {
+    notify("File sort failed", message, "dialog-error", Critical);
 }
 
 fn unique_destination(target_path: &Path) -> PathBuf {
@@ -139,11 +164,14 @@ pub fn process_file(file_path: &Path, downloads_dir: &Path) {
                 mime
             );
 
-            notify_message(&format!(
-                "{} moved to {}",
-                file_name.to_string_lossy(),
-                target_subfolder
-            ));
+            notify_file_sorted(
+                &format!(
+                    "{} moved to {}",
+                    file_name.to_string_lossy(),
+                    target_subfolder
+                ),
+                &destination_folder,
+            );
         }
 
         Err(e) => {
